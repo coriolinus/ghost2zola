@@ -5,11 +5,11 @@ authors = ["Peter Goodspeed-Niklaus <peter.r.goodspeedniklaus@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+anyhow = "1.0.33"
 bzip2 = "0.4.1"
 libflate = "1.0.2"
-rusqlite = "0.24.1"
+rusqlite = { version = "0.24.1", features = [ "bundled" ] }
 structopt = "0.3.20"
 tar = "0.4.30"
-tree_magic = "0.2.3"
 thiserror = "1.0.21"
-anyhow = "1.0.33"
+tree_magic = "0.2.3"
