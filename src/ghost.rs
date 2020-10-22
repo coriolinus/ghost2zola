@@ -8,6 +8,7 @@ use chrono::{
     serde::{ts_milliseconds, ts_milliseconds_option},
     DateTime, Utc,
 };
+use mobiledoc::Mobiledoc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -65,10 +66,11 @@ pub struct User {
     pub email: String,
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct Post {
     pub title: String,
-    pub mobiledoc: Option<String>,
+    #[serde(with = "mobiledoc::serde_str_option")]
+    pub mobiledoc: Option<Mobiledoc>,
     pub status: Option<String>,
     #[serde(with = "ts_milliseconds_option")]
     pub published_at: Option<DateTime<Utc>>,

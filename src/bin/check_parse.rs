@@ -20,9 +20,8 @@ fn main() -> anyhow::Result<()> {
     };
     let reader = std::io::BufReader::new(reader);
     match serde_json::from_reader::<_, Top>(reader) {
-        Ok(top) => {
+        Ok(_) => {
             println!("parsed ok!");
-            println!("dbs: {}", top.dbs().count());
         }
         Err(e) => eprintln!("{:#?}", e),
     }
