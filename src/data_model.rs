@@ -4,9 +4,11 @@ use rusqlite::{
     types::{FromSql, FromSqlResult},
     Connection,
 };
-use std::fmt;
 use serde::Serialize;
+use slugify::slugify;
+use std::fmt;
 use std::io::Write;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
@@ -75,7 +77,7 @@ pub struct Post {
     #[serde(
         skip_serializing_if = "Status::published",
         serialize_with = "Status::serialize_as_bool",
-        rename = "draft",
+        rename = "draft"
     )]
     pub status: Status,
 
@@ -166,6 +168,28 @@ impl Post {
         writeln!(writer, "{}", self.content)?;
         Ok(())
     }
+
+    /// return the relative path to which this post should be rendered
+    pub fn relative_path(&self) -> PathBuf {
+        let base = match self.date {
+            Some(date) => PathBuf::new()
+                .join(date.format("%Y").to_string())
+                .join(date.format("%m").to_string())
+                .join(date.format("%d").to_string()),
+            None => PathBuf::from("undated"),
+        };
+        let name = PathBuf::from(if self.slug.is_empty() {
+            if self.title.is_empty() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                slugify!(&self.title, max_length = 150)
+            }
+        } else {
+            self.slug.clone()
+        })
+        .with_extension("md");
+        base.join(name)
+    }
 }
 
 impl fmt::Display for Post {
@@ -173,7 +197,7 @@ impl fmt::Display for Post {
         let mut rendered = Vec::new();
         self.render_to(&mut rendered).map_err(|_| std::fmt::Error)?;
         // this is safe because we just populated the render with only valid utf-8
-        write!(f, "{}", unsafe {String::from_utf8_unchecked(rendered)})
+        write!(f, "{}", unsafe { String::from_utf8_unchecked(rendered) })
     }
 }
 

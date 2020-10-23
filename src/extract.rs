@@ -1,17 +1,18 @@
-use crate::{find_ghost_db_in, try_archive, Error};
+use crate::{data_model::Post, find_ghost_db_in, try_archive, Error};
 use log;
+use rusqlite::Connection;
 use std::path::{Path, PathBuf};
-use tempfile::tempfile;
+use tempfile::NamedTempFile;
 
 struct PartialExtraction {
-    database: std::fs::File,
+    database: NamedTempFile,
     images: Vec<PathBuf>,
 }
 
 impl PartialExtraction {
     fn new() -> Result<PartialExtraction, Error> {
         Ok(PartialExtraction {
-            database: tempfile()?,
+            database: NamedTempFile::new()?,
             images: Vec::new(),
         })
     }
@@ -32,7 +33,7 @@ impl PartialExtraction {
 fn extract_images_and_db<AP>(
     archive_path: AP,
     prefix: Option<PathBuf>,
-    extract_path: PathBuf,
+    extract_path: &Path,
 ) -> Result<PartialExtraction, Error>
 where
     AP: AsRef<Path>,
@@ -128,19 +129,40 @@ where
 /// | `language` | `extra.language` | |
 /// | `users.name` | `extra.author_name` | `posts inner join users on posts.author_id = users.id` |
 /// | `tags.name` | `taxonomies.tags` | `select tags.name from posts_tags inner join tags on posts_tags.tag_id = tags.id where posts_tags.post_id = %` |
-pub fn extract_archive<AP>(
+pub fn extract_archive<AP, EP>(
     archive_path: AP,
     prefix: Option<PathBuf>,
-    extract_path: PathBuf,
+    extract_path: EP,
 ) -> Result<usize, Error>
 where
     AP: AsRef<Path>,
+    EP: AsRef<Path>,
 {
-    extract_images_and_db(archive_path, prefix, extract_path)?.extract_database()
+    let extract_path = extract_path.as_ref();
+    extract_images_and_db(archive_path, prefix, extract_path)?.extract_database(extract_path)
 }
 
 impl PartialExtraction {
-    fn extract_database(self) -> Result<usize, Error> {
-        unimplemented!()
+    fn extract_database(self, extract_path: &Path) -> Result<usize, Error> {
+        let conn = Connection::open_with_flags(
+            self.database.path(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let posts = Post::query(&conn)?;
+        for post in posts.iter() {
+            let relative_path = post.relative_path();
+            let path = extract_path.join(&relative_path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(path)?;
+            let mut writer = std::io::BufWriter::new(file);
+            post.render_to(&mut writer)?;
+            log::trace!("generated {}", relative_path.display());
+        }
+        Ok(posts.len())
     }
 }
