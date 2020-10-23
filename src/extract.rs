@@ -68,8 +68,15 @@ where
             // handle the database itself
             contextualize!(std::io::copy(&mut entry, &mut out.database))?;
             log::info!("extracted database at entry {}", idx);
-        } else if entry.header().entry_type() == tar::EntryType::Directory {
+        } else if entry.header().entry_type() == tar::EntryType::Directory
+            || path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_lowercase())
+                == Some(String::from("md"))
+        {
             // don't waste time on directories; we can unpack them on demand later
+            // likewise, it's more trouble than it's worth to copy over markdown files
             continue;
         } else if let Some(images_base) = &images_base {
             if path.starts_with(images_base) {
