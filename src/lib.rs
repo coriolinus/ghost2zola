@@ -22,3 +22,13 @@ pub enum Error {
     #[error("generating frontmatter toml")]
     Frontmatter(#[from] toml::ser::Error),
 }
+
+pub(crate) fn log_progress(idx: usize, verb: &str) {
+    if idx > 0 {
+        if idx & 0x7fff == 0 {
+            log::info!("{} {} archive entries", verb, idx);
+        } else if idx & 0x1fff == 0 {
+            log::trace!("{} {} archive entries", verb, idx);
+        }
+    }
+}

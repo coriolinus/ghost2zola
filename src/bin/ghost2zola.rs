@@ -26,7 +26,7 @@ struct Opt {
 }
 
 fn main() -> Result<(), anyhow::Error> {
-    pretty_env_logger::init();
+    pretty_env_logger::init_timed();
     let opt = Opt::from_args();
 
     extract_archive(opt.archive_path, opt.prefix, opt.extract_path)?;

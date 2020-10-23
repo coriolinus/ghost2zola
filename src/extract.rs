@@ -1,5 +1,6 @@
-use crate::{data_model::Post, find_ghost_db_in, try_archive, Error};
+use crate::{data_model::Post, find_ghost_db_in, log_progress, try_archive, Error};
 use log;
+use path_absolutize::Absolutize;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
@@ -16,6 +17,15 @@ impl PartialExtraction {
             images: Vec::new(),
         })
     }
+}
+
+macro_rules! contextualize {
+    ($e:expr) => {
+        contextualize!($e; stringify!($e))
+    };
+    ($e:expr; $($c:expr),+) => {
+        ($e).map_err(|e| {log::error!($($c),+); e})
+    };
 }
 
 /// extract images and database from an archive
@@ -39,36 +49,35 @@ where
     AP: AsRef<Path>,
 {
     let archive_path = archive_path.as_ref();
-    let db_path = find_ghost_db_in(archive_path, prefix)?;
+    let extract_path = contextualize!(extract_path.canonicalize())?;
+    let db_path = contextualize!(find_ghost_db_in(archive_path, prefix))?;
     let images_base = db_path
         .parent()
         .and_then(|parent| parent.parent())
         .map(|grandparent| grandparent.join("images"));
 
     log::info!("processing archive");
-    let mut archive = try_archive(archive_path)?;
-    let mut out = PartialExtraction::new()?;
-    for (idx, entry) in archive.entries()?.enumerate() {
-        if idx > 0 {
-            if idx & 0x3fff == 0 {
-                log::info!("processed {} archive entries", idx);
-            } else if idx & 0xfff == 0 {
-                log::trace!("processed {} archive entries", idx);
-            }
-        }
+    let mut archive = contextualize!(try_archive(archive_path))?;
+    let mut out = contextualize!(PartialExtraction::new())?;
+    for (idx, entry) in contextualize!(archive.entries())?.enumerate() {
+        log_progress(idx, "processed");
 
-        let mut entry = entry?;
-        let path = entry.path()?;
+        let mut entry = contextualize!(entry)?;
+        let path = contextualize!(entry.path())?;
         if path == db_path {
             // handle the database itself
-            std::io::copy(&mut entry, &mut out.database)?;
+            contextualize!(std::io::copy(&mut entry, &mut out.database))?;
             log::info!("extracted database at entry {}", idx);
+        } else if entry.header().entry_type() == tar::EntryType::Directory {
+            // don't waste time on directories; we can unpack them on demand later
+            continue;
         } else if let Some(images_base) = &images_base {
             if path.starts_with(images_base) {
                 // handle an image
-                let subpath = path.strip_prefix(images_base)?;
-                let extract_to = extract_path.join(subpath).canonicalize()?;
-                if !extract_to.starts_with(images_base) {
+                let subpath = contextualize!(path.strip_prefix(images_base))?;
+                let extract_to =
+                    contextualize!((&extract_path).join(subpath).absolutize())?.to_path_buf();
+                if !extract_to.starts_with(&extract_path) {
                     log::warn!(
                         "malicious file in tar attempted to extract past extraction root: {}",
                         subpath.display(),
@@ -76,10 +85,10 @@ where
                     continue;
                 }
                 if let Some(parent) = extract_to.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    contextualize!(std::fs::create_dir_all(parent))?;
                 }
-                log::trace!("extracting image: {}", subpath.display());
-                entry.unpack(&extract_to)?;
+                log::trace!("extracting image: {}", extract_to.display());
+                contextualize!(entry.unpack(&extract_to))?;
                 out.images.push(extract_to);
             }
         }

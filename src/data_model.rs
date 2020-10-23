@@ -19,10 +19,21 @@ lazy_static! {
             .case_insensitive(true)
             .build()
             .unwrap();
+    static ref DATE_QUOTE_STRIP_RE: Regex =
+        regex::RegexBuilder::new(r#"^(date|updated) = "([- \w\d:\.]+)"$"#)
+            .multi_line(true)
+            .build()
+            .unwrap();
 }
 
 pub(crate) fn relative_internal_links(text: &str) -> String {
     INTERNAL_LINK_RE.replace_all(text, "](../$1)").into_owned()
+}
+
+pub(crate) fn strip_datetime_quotes(text: &str) -> String {
+    DATE_QUOTE_STRIP_RE
+        .replace_all(text, "$1 = $2")
+        .into_owned()
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
@@ -132,8 +143,9 @@ impl Post {
                 Ok(Post {
                     // ID: 0
                     title: row.get(1)?,
-                    content: row.get(2)?,
-                    description: row.get(3)?,
+                    // content and description are possibly null; we want to map those to empty strings
+                    content: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    description: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
                     date: row.get(4)?,
                     updated: row.get(5)?,
                     status: row.get(6)?,
@@ -175,9 +187,15 @@ impl Post {
         Ok(())
     }
 
+    fn render_toml(&self) -> Result<String, crate::Error> {
+        // this is necessary because the TOML library doesn't handle TOML datetimes, emitting strings instead
+        // we have to work around that
+        Ok(strip_datetime_quotes(&toml::to_string(self)?))
+    }
+
     pub fn render_to<W: Write>(&self, writer: &mut W) -> Result<(), crate::Error> {
         writeln!(writer, "+++")?;
-        writeln!(writer, "{}", toml::to_string(self)?)?;
+        writeln!(writer, "{}", self.render_toml()?)?;
         writeln!(writer, "+++")?;
         writeln!(writer, "")?;
         writeln!(writer, "{}", self.content)?;
@@ -273,16 +291,18 @@ mod tests {
             replace_links("![](/content/images/2020/01/asdf.jpg)", "![](../asdf.jpg)");
         }
 
-
         #[test]
         fn test_should_skip_external_link() {
-            let external ="![](https://photobucket.com/content/images/2020/01/asdf.jpg)";
+            let external = "![](https://photobucket.com/content/images/2020/01/asdf.jpg)";
             replace_links(external, external);
         }
 
         #[test]
         fn test_leaves_extra_markup() {
-            replace_links("![very important pictures](/content/images/1234/56/fds.png)", "![very important pictures](../fds.png)");
+            replace_links(
+                "![very important pictures](/content/images/1234/56/fds.png)",
+                "![very important pictures](../fds.png)",
+            );
         }
 
         #[test]
@@ -309,5 +329,69 @@ mod tests {
 
             replace_links(gallery, expect);
         }
+    }
+
+    #[test]
+    fn strip_quotes_from_date() {
+        let input = r#"
+title = "Fancy Example Post"
+slug = "fancy-example-post"
+date = "2020-10-23T20:13:54.069963100Z"
+
+[extra]
+id = 123
+language = "en_EN"
+author_name = "me"
+
+[taxonomies]
+tags = ["tag1", "another"]
+"#;
+        let expect = r#"
+title = "Fancy Example Post"
+slug = "fancy-example-post"
+date = 2020-10-23T20:13:54.069963100Z
+
+[extra]
+id = 123
+language = "en_EN"
+author_name = "me"
+
+[taxonomies]
+tags = ["tag1", "another"]
+"#;
+        assert_eq!(strip_datetime_quotes(input), expect);
+    }
+
+    #[test]
+    fn strip_quotes_from_update() {
+        let input = r#"
+title = "Fancy Example Post"
+slug = "fancy-example-post"
+date = "2020-10-23T20:13:54.069963100Z"
+updated = "2020-10-23T20:13:54.069963101Z"
+
+[extra]
+id = 123
+language = "en_EN"
+author_name = "me"
+
+[taxonomies]
+tags = ["tag1", "another"]
+"#;
+        let expect = r#"
+title = "Fancy Example Post"
+slug = "fancy-example-post"
+date = 2020-10-23T20:13:54.069963100Z
+updated = 2020-10-23T20:13:54.069963101Z
+
+[extra]
+id = 123
+language = "en_EN"
+author_name = "me"
+
+[taxonomies]
+tags = ["tag1", "another"]
+"#;
+        assert_eq!(strip_datetime_quotes(input), expect);
     }
 }

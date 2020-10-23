@@ -1,4 +1,4 @@
-use crate::Error;
+use crate::{log_progress, Error};
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -53,18 +53,22 @@ pub fn find_ghost_dbs<'a, R>(
 where
     R: 'a + Read,
 {
-    Ok(archive.entries()?.filter_map(|maybe_entry| {
-        maybe_entry
-            .ok()
-            .map(|entry| {
-                entry
-                    .path()
-                    .ok()
-                    .filter(|path| path.file_name() == Some(OsStr::new("ghost.db")))
-                    .map(|path| path.into_owned())
-            })
-            .flatten()
-    }))
+    Ok(archive
+        .entries()?
+        .enumerate()
+        .filter_map(|(idx, maybe_entry)| {
+            log_progress(idx, "inspected");
+            maybe_entry
+                .ok()
+                .map(|entry| {
+                    entry
+                        .path()
+                        .ok()
+                        .filter(|path| path.file_name() == Some(OsStr::new("ghost.db")))
+                        .map(|path| path.into_owned())
+                })
+                .flatten()
+        }))
 }
 
 fn conditional_filter<'a>(
