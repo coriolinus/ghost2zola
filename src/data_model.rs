@@ -169,6 +169,23 @@ impl Post {
         Ok(())
     }
 
+    /// construct a safe slug for this post
+    ///
+    /// - if a slug has already been set, use that
+    /// - otherwise, construct one from the title
+    /// - unless the title is empty, in which case use a uuidv4
+    pub fn slug(&self) -> String {
+        if self.slug.is_empty() {
+            if self.title.is_empty() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                slugify!(&self.title, max_length = 150)
+            }
+        } else {
+            self.slug.clone()
+        }
+    }
+
     /// return the relative path to which this post should be rendered
     pub fn relative_path(&self) -> PathBuf {
         let base = match self.date {
@@ -178,16 +195,7 @@ impl Post {
                 .join(date.format("%d").to_string()),
             None => PathBuf::from("undated"),
         };
-        let name = PathBuf::from(if self.slug.is_empty() {
-            if self.title.is_empty() {
-                uuid::Uuid::new_v4().to_string()
-            } else {
-                slugify!(&self.title, max_length = 150)
-            }
-        } else {
-            self.slug.clone()
-        })
-        .with_extension("md");
+        let name = PathBuf::from(self.slug()).with_extension("md");
         base.join(name)
     }
 }
