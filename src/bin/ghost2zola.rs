@@ -1,4 +1,4 @@
-use ghost2zola::{extract_archive};
+use ghost2zola::extract_archive;
 use std::path::PathBuf;
 use structopt::StructOpt;
 

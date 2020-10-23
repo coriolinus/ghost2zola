@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+use lazy_static::lazy_static;
+use regex::Regex;
 use rusqlite::{
     self, params,
     types::{FromSql, FromSqlResult},
@@ -10,6 +12,18 @@ use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
+
+lazy_static! {
+    static ref INTERNAL_LINK_RE: Regex =
+        regex::RegexBuilder::new(r"\]\(/content/images/\d{4}/\d{2}/([^)]+)\)")
+            .case_insensitive(true)
+            .build()
+            .unwrap();
+}
+
+pub(crate) fn relative_internal_links(text: &str) -> String {
+    INTERNAL_LINK_RE.replace_all(text, "](../$1)").into_owned()
+}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum Status {
@@ -137,6 +151,7 @@ impl Post {
         if let Ok(posts) = &mut out {
             for post in posts.iter_mut() {
                 post.update_tags(conn)?;
+                post.content = relative_internal_links(&post.content);
             }
         }
 
@@ -244,5 +259,55 @@ mod tests {
         };
 
         println!("{}", post.to_string());
+    }
+
+    mod replace_links {
+        use super::super::*;
+
+        fn replace_links(example: &str, expect: &str) {
+            assert_eq!(relative_internal_links(example), expect);
+        }
+
+        #[test]
+        fn test_should_replace_link() {
+            replace_links("![](/content/images/2020/01/asdf.jpg)", "![](../asdf.jpg)");
+        }
+
+
+        #[test]
+        fn test_should_skip_external_link() {
+            let external ="![](https://photobucket.com/content/images/2020/01/asdf.jpg)";
+            replace_links(external, external);
+        }
+
+        #[test]
+        fn test_leaves_extra_markup() {
+            replace_links("![very important pictures](/content/images/1234/56/fds.png)", "![very important pictures](../fds.png)");
+        }
+
+        #[test]
+        fn test_big() {
+            let gallery = "
+            Hello, welcome to my gallery. I've included several pictures.
+
+            ![](/content/images/2020/01/asdf.jpg)
+            ![](https://photobucket.com/content/images/2020/01/asdf.jpg)
+            ![very important pictures](/content/images/1234/56/fds.png)
+
+            As you can see, they are phenomenal.
+            ";
+
+            let expect = "
+            Hello, welcome to my gallery. I've included several pictures.
+
+            ![](../asdf.jpg)
+            ![](https://photobucket.com/content/images/2020/01/asdf.jpg)
+            ![very important pictures](../fds.png)
+
+            As you can see, they are phenomenal.
+            ";
+
+            replace_links(gallery, expect);
+        }
     }
 }
