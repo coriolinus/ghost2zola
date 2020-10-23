@@ -8,6 +8,8 @@ edition = "2018"
 anyhow = "1.0.33"
 bzip2 = "0.4.1"
 libflate = "1.0.2"
+log = "0.4.11"
+pretty_env_logger = "0.4.0"
 rusqlite = { version = "0.24.1", features = [ "bundled" ] }
 structopt = "0.3.20"
 tar = "0.4.30"

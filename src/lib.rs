@@ -1,3 +1,4 @@
+use log;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -116,6 +117,7 @@ pub fn find_ghost_db_in<P: AsRef<Path>>(
     path: P,
     prefix: Option<PathBuf>,
 ) -> Result<PathBuf, Error> {
+    log::info!("analyzing archive");
     let mut archive = try_archive(path.as_ref())?;
     find_ghost_db(&mut archive, prefix)
 }
@@ -161,35 +163,46 @@ where
         .and_then(|parent| parent.parent())
         .map(|grandparent| grandparent.join("images"));
 
+    log::info!("processing archive");
     let mut archive = try_archive(archive_path)?;
     let mut out = PartialExtraction::new()?;
-    for entry in archive.entries()? {
+    for (idx, entry) in archive.entries()?.enumerate() {
+        if idx > 0 {
+            if idx & 0x3fff == 0 {
+                log::info!("processed {} archive entries", idx);
+            } else if idx & 0xfff == 0 {
+                log::trace!("processed {} archive entries", idx);
+            }
+        }
+
         let mut entry = entry?;
         let path = entry.path()?;
         if path == db_path {
             // handle the database itself
             std::io::copy(&mut entry, &mut out.database)?;
+            log::info!("extracted database at entry {}", idx);
         } else if let Some(images_base) = &images_base {
             if path.starts_with(images_base) {
                 // handle an image
-                let extract_to = extract_path
-                    .join(path.strip_prefix(images_base)?)
-                    .canonicalize()?;
+                let subpath = path.strip_prefix(images_base)?;
+                let extract_to = extract_path.join(subpath).canonicalize()?;
                 if !extract_to.starts_with(images_base) {
-                    eprintln!(
-                        "warn: malicious file in tar attempted to extract past extraction root:"
+                    log::warn!(
+                        "malicious file in tar attempted to extract past extraction root: {}",
+                        subpath.display(),
                     );
-                    eprintln!("  {}", path.strip_prefix(images_base)?.display());
                     continue;
                 }
                 if let Some(parent) = extract_to.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
+                log::trace!("extracting image: {}", subpath.display());
                 entry.unpack(&extract_to)?;
                 out.images.push(extract_to);
             }
         }
     }
+    log::info!("extracted {} images", out.images.len());
 
     Ok(out)
 }

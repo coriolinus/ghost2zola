@@ -10,6 +10,8 @@ struct Opt {
 }
 
 fn main() {
+    pretty_env_logger::init();
+
     let opt = Opt::from_args();
     let longest_path = opt
         .paths

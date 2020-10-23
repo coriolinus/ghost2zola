@@ -18,6 +18,8 @@ struct Opt {
 }
 
 fn main() -> Result<(), anyhow::Error> {
+    pretty_env_logger::init();
+
     let opt = Opt::from_args();
     let mut archive = try_archive(&opt.path)?;
     if opt.all {
