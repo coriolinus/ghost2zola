@@ -1,5 +1,3 @@
-use thiserror::Error;
-
 pub mod data_model;
 
 mod archive;
@@ -7,7 +5,7 @@ mod extract;
 pub use archive::{find_ghost_db, find_ghost_db_in, find_ghost_dbs, try_archive};
 pub use extract::extract_archive;
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("IO")]
     Io(#[from] std::io::Error),
@@ -19,6 +17,8 @@ pub enum Error {
     MultipleGhostDb,
     #[error("failed to strip an image prefix")]
     StripPrefix(#[from] std::path::StripPrefixError),
-    #[error("SQL")]
+    #[error("reading ghost database")]
     Sql(#[from] rusqlite::Error),
+    #[error("generating frontmatter toml")]
+    Frontmatter(#[from] toml::ser::Error),
 }

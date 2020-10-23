@@ -4,6 +4,9 @@ use rusqlite::{
     types::{FromSql, FromSqlResult},
     Connection,
 };
+use std::fmt;
+use serde::Serialize;
+use std::io::Write;
 use std::str::FromStr;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
@@ -36,26 +39,60 @@ impl Status {
     pub fn draft(&self) -> bool {
         *self == Status::Draft
     }
+
+    pub fn published(&self) -> bool {
+        !self.draft()
+    }
+
+    fn serialize_as_bool<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_bool(self.draft())
+    }
 }
 
-#[derive(Debug)]
-pub struct Post {
+#[derive(Debug, Default, Serialize)]
+pub struct Extra {
     pub id: i64,
-    pub title: String,
-    pub content: String,
-    pub description: Option<String>,
-    // Sqlite uses UTC for all times by default:
-    // <https://sqlite.org/lang_datefunc.html> section 2
-    pub date: Option<DateTime<Utc>>,
-    pub updated: Option<DateTime<Utc>>,
-    pub status: Option<Status>,
-    pub slug: String,
     pub language: String,
     pub author_name: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct Post {
+    pub title: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub slug: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    // Sqlite uses UTC for all times by default:
+    // <https://sqlite.org/lang_datefunc.html> section 2
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated: Option<DateTime<Utc>>,
+    #[serde(
+        skip_serializing_if = "Status::published",
+        serialize_with = "Status::serialize_as_bool",
+        rename = "draft",
+    )]
+    pub status: Status,
+
+    pub extra: Extra,
+    pub taxonomies: Taxonomies,
+
+    #[serde(skip)]
+    pub content: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct Taxonomies {
+    tags: Vec<String>,
+}
+
 impl Post {
-    pub fn query(conn: &Connection) -> Result<Vec<Self>, rusqlite::Error> {
+    pub fn query(conn: &Connection) -> Result<Vec<Post>, rusqlite::Error> {
         let mut stmt = conn.prepare(
             "
             SELECT
@@ -74,26 +111,37 @@ impl Post {
             ON posts.author_id = users.id
             ",
         )?;
-        let out = stmt
+        let mut out: Result<Vec<Post>, rusqlite::Error> = stmt
             .query_map(params![], |row| {
                 Ok(Post {
-                    id: row.get(0)?,
+                    // ID: 0
                     title: row.get(1)?,
-                    content: row.get(3)?,
-                    description: row.get(4)?,
-                    date: row.get(5)?,
-                    updated: row.get(6)?,
-                    status: row.get(7)?,
-                    slug: row.get(8)?,
-                    language: row.get(9)?,
-                    author_name: row.get(10)?,
+                    content: row.get(2)?,
+                    description: row.get(3)?,
+                    date: row.get(4)?,
+                    updated: row.get(5)?,
+                    status: row.get(6)?,
+                    slug: row.get(7)?,
+                    extra: Extra {
+                        id: row.get(0)?,
+                        language: row.get(8)?,
+                        author_name: row.get(9)?,
+                    },
+                    taxonomies: Taxonomies::default(),
                 })
             })?
             .collect();
+
+        if let Ok(posts) = &mut out {
+            for post in posts.iter_mut() {
+                post.update_tags(conn)?;
+            }
+        }
+
         out
     }
 
-    pub fn tags(&self, conn: &Connection) -> Result<Vec<String>, rusqlite::Error> {
+    fn update_tags(&mut self, conn: &Connection) -> Result<(), rusqlite::Error> {
         let mut stmt = conn.prepare(
             "
             SELECT
@@ -104,9 +152,65 @@ impl Post {
             WHERE posts_tags.post_id = ?1
             ",
         )?;
-        let out = stmt
-            .query_map(params![self.id], |row| Ok(row.get(0)?))?
-            .collect();
-        out
+        self.taxonomies.tags = stmt
+            .query_map(params![self.extra.id], |row| Ok(row.get::<_, String>(0)?))?
+            .collect::<Result<Vec<String>, rusqlite::Error>>()?;
+        Ok(())
+    }
+
+    pub fn render_to<W: Write>(&self, writer: &mut W) -> Result<(), crate::Error> {
+        writeln!(writer, "+++")?;
+        writeln!(writer, "{}", toml::to_string(self)?)?;
+        writeln!(writer, "+++")?;
+        writeln!(writer, "")?;
+        writeln!(writer, "{}", self.content)?;
+        Ok(())
+    }
+}
+
+impl fmt::Display for Post {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut rendered = Vec::new();
+        self.render_to(&mut rendered).map_err(|_| std::fmt::Error)?;
+        // this is safe because we just populated the render with only valid utf-8
+        write!(f, "{}", unsafe {String::from_utf8_unchecked(rendered)})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn can_render() {
+        let post = Post {
+            title: "Fancy Example Post".into(),
+            content: "I'm so fancy, I have paragraphs.\n\nSee!?".into(),
+            description: String::new(),
+            date: None,
+            updated: None,
+            status: Status::Draft,
+            slug: "fancy-example-post".into(),
+            extra: Extra {
+                id: 123,
+                language: "en_EN".into(),
+                author_name: "me".into(),
+            },
+            taxonomies: Taxonomies {
+                tags: vec!["tag1".into(), "another".into()],
+            },
+        };
+
+        println!("{}", post.to_string());
+        println!("=== next post ===");
+
+        let post = Post {
+            date: Some(Utc::now()),
+            status: Status::Published,
+            content: post.content + "\n\nAll Done",
+            ..post
+        };
+
+        println!("{}", post.to_string());
     }
 }
