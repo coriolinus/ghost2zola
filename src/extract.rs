@@ -2,6 +2,7 @@ use crate::{data_model::Post, find_ghost_db_in, log_progress, try_archive, Error
 use log;
 use path_absolutize::Absolutize;
 use rusqlite::Connection;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
@@ -179,6 +180,92 @@ impl PartialExtraction {
             post.render_to(&mut writer)?;
             log::trace!("generated {}", relative_path.display());
         }
+
+        // now ensure that appropriate indices exist
+        ensure_indices(extract_path)?;
+
         Ok(posts.len())
     }
+}
+
+const ROOT_INDEX_DATA: &[u8] = include_bytes!("../templates/root._index.md");
+const BRANCH_INDEX_DATA: &[u8] = include_bytes!("../templates/branch._index.md");
+
+fn ensure_indices(extract_path: &Path) -> Result<(), Error> {
+    let index = extract_path.join("_index.md");
+    if !index.exists() {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(index)?;
+        file.write_all(ROOT_INDEX_DATA)?;
+    }
+
+    for subdir in extract_path.read_dir()?.filter(|maybe_dir_entry| {
+        maybe_dir_entry
+            .as_ref()
+            .map(|dir_entry| {
+                dir_entry
+                    .file_type()
+                    .map(|file_type| file_type.is_dir())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }) {
+        let subdir = match subdir {
+            Ok(subdir) => subdir,
+            Err(e) => {
+                log::error!(
+                    "failed to read subdirectory of {}: {:#?}",
+                    extract_path.display(),
+                    e
+                );
+                continue;
+            }
+        };
+
+        ensure_indices_recursive(&subdir.path())?;
+    }
+
+    /// Recursive mode on!
+    fn ensure_indices_recursive(path: &Path) -> Result<(), Error> {
+        let index = path.join("_index.md");
+        if !index.exists() {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(index)?;
+            file.write_all(BRANCH_INDEX_DATA)?;
+        }
+
+        for subdir in path.read_dir()?.filter(|maybe_dir_entry| {
+            maybe_dir_entry
+                .as_ref()
+                .map(|dir_entry| {
+                    dir_entry
+                        .file_type()
+                        .map(|file_type| file_type.is_dir())
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default()
+        }) {
+            let subdir = match subdir {
+                Ok(subdir) => subdir,
+                Err(e) => {
+                    log::error!(
+                        "failed to read subdirectory of {}: {:#?}",
+                        path.display(),
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            ensure_indices_recursive(&subdir.path())?;
+        }
+
+        Ok(())
+    }
+
+    Ok(())
 }
