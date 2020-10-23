@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use tempfile::tempfile;
 use thiserror::Error;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
@@ -33,6 +34,8 @@ pub enum Error {
     GhostDbNotFound,
     #[error("input contains more than one ghost.db within search area")]
     MultipleGhostDb,
+    #[error("failed to strip an image prefix")]
+    StripPrefix(#[from] std::path::StripPrefixError),
 }
 
 fn try_to_tar_reader(path: &Path) -> Result<Box<dyn Read>, Error> {
@@ -106,4 +109,87 @@ where
         1 => Ok(std::mem::take(&mut dbs[0])),
         _ => unreachable!(),
     }
+}
+
+/// find the internal path to a ghost db in an archive
+pub fn find_ghost_db_in<P: AsRef<Path>>(
+    path: P,
+    prefix: Option<PathBuf>,
+) -> Result<PathBuf, Error> {
+    let mut archive = try_archive(path.as_ref())?;
+    find_ghost_db(&mut archive, prefix)
+}
+
+struct PartialExtraction {
+    database: std::fs::File,
+    images: Vec<PathBuf>,
+}
+
+impl PartialExtraction {
+    fn new() -> Result<PartialExtraction, Error> {
+        Ok(PartialExtraction {
+            database: tempfile()?,
+            images: Vec::new(),
+        })
+    }
+}
+
+/// extract images and database from an archive
+///
+/// # Image Handling
+///
+/// Assuming that the ghost DB is located in `a/b/c/data/ghost.db`, in a standard configuration,
+/// the images will be located in `a/b/c/images/yyyy/mm/*`. They will be extracted into
+/// `extract_path/yyyy/mm/*`.
+///
+/// # Database Handling
+///
+/// To avoid memory issues with large databases, the database is extracted into a temporary file.
+/// This file will be automatically removed by the OS when it is closed.
+fn extract_images_and_db<AP>(
+    archive_path: AP,
+    prefix: Option<PathBuf>,
+    extract_path: PathBuf,
+) -> Result<PartialExtraction, Error>
+where
+    AP: AsRef<Path>,
+{
+    let archive_path = archive_path.as_ref();
+    let db_path = find_ghost_db_in(archive_path, prefix)?;
+    let images_base = db_path
+        .parent()
+        .and_then(|parent| parent.parent())
+        .map(|grandparent| grandparent.join("images"));
+
+    let mut archive = try_archive(archive_path)?;
+    let mut out = PartialExtraction::new()?;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?;
+        if path == db_path {
+            // handle the database itself
+            std::io::copy(&mut entry, &mut out.database)?;
+        } else if let Some(images_base) = &images_base {
+            if path.starts_with(images_base) {
+                // handle an image
+                let extract_to = extract_path
+                    .join(path.strip_prefix(images_base)?)
+                    .canonicalize()?;
+                if !extract_to.starts_with(images_base) {
+                    eprintln!(
+                        "warn: malicious file in tar attempted to extract past extraction root:"
+                    );
+                    eprintln!("  {}", path.strip_prefix(images_base)?.display());
+                    continue;
+                }
+                if let Some(parent) = extract_to.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                entry.unpack(&extract_to)?;
+                out.images.push(extract_to);
+            }
+        }
+    }
+
+    Ok(out)
 }
