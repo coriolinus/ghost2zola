@@ -6,7 +6,7 @@ use tempfile::tempfile;
 use thiserror::Error;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
-pub enum FileType {
+enum FileType {
     Sqlite3,
     Tar,
     TarGz,
@@ -14,7 +14,7 @@ pub enum FileType {
 }
 
 impl FileType {
-    pub fn try_from_path(path: &Path) -> Option<Self> {
+    fn try_from_path(path: &Path) -> Option<Self> {
         match tree_magic::from_filepath(path).as_str() {
             "application/vnd.sqlite3" => Some(FileType::Sqlite3),
             "application/x-tar" => Some(FileType::Tar),
