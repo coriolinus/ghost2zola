@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use lazy_static::lazy_static;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use rusqlite::{
     self, params,
     types::{FromSql, FromSqlResult},
@@ -15,25 +15,88 @@ use std::str::FromStr;
 
 lazy_static! {
     static ref INTERNAL_LINK_RE: Regex =
-        regex::RegexBuilder::new(r"\]\(/content/images/\d{4}/\d{2}/([^)]+)\)")
+        RegexBuilder::new(r"\]\(/content/images/\d{4}/\d{2}/([^)]+)\)")
             .case_insensitive(true)
             .build()
             .unwrap();
     static ref DATE_QUOTE_STRIP_RE: Regex =
-        regex::RegexBuilder::new(r#"^(date|updated) = "([- \w\d:\.]+)"$"#)
+        RegexBuilder::new(r#"^(date|updated) = "([- \w\d:\.]+)"$"#)
             .multi_line(true)
             .build()
             .unwrap();
+    static ref PRE_REIFIED_FOOTNOTES: Regex = Regex::new(r"\[\^(\d+)\]").unwrap();
+    static ref FOOTNOTE_FOOT: Regex = RegexBuilder::new(r"^\[\^n\]:")
+        .multi_line(true)
+        .build()
+        .unwrap();
+    static ref FOOTNOTE_TEXT: Regex = Regex::new(r"\[\^n\]").unwrap();
 }
 
+/// replace internal hardlinks with relative links to the parent
 pub(crate) fn relative_internal_links(text: &str) -> String {
     INTERNAL_LINK_RE.replace_all(text, "](../$1)").into_owned()
 }
 
+/// strip quotation marks from toml fields named `date` or `updated`
 pub(crate) fn strip_datetime_quotes(text: &str) -> String {
     DATE_QUOTE_STRIP_RE
         .replace_all(text, "$1 = $2")
         .into_owned()
+}
+
+/// Replace all detected abstract footnotes with numbered ones.
+///
+/// Ghost has a somewhat more advanced notion of footnotes than Zola does: you can use `[^n]` to insert
+/// a footnote anywhere, and `[^n]:`, and both matching and linking happen automatically.
+///
+/// Zola is a little less smart about this: you only get one-way links, and all `[^n]` get replaced with `[^1]`.
+/// This isn't the most useful thing. Therefore, we have to replace all `[^n]` with actual numbers, not clobbering
+/// any other footnotes already injected.
+///
+/// This implementation numbers weirdly if someone has already inserted any hard numbered footnotes interspersed
+/// with the generated ones, but that's their problem for doing it wrong.
+pub(crate) fn reify_footnotes(s: &str) -> String {
+    // first, go through the existing numbered footnotes and find the highest
+    let highest_existing: u32 = PRE_REIFIED_FOOTNOTES
+        .captures_iter(s)
+        .map(|capture| {
+            capture
+                .get(1)
+                .map(|mtch| mtch.as_str().parse().unwrap_or_default())
+                .unwrap_or_default()
+        })
+        .max()
+        .unwrap_or_default();
+
+    let mut text = s.to_string();
+
+    // sequentially replace all footer footnote anchors with incrementing numbers
+    let mut idx = highest_existing;
+    loop {
+        idx += 1;
+        let mut new = FOOTNOTE_FOOT
+            .replace(&text, format!("[^{}]:", idx).as_str())
+            .to_string();
+        std::mem::swap(&mut text, &mut new);
+        if text == new {
+            break;
+        }
+    }
+
+    // now do it again for the text footnote anchors
+    let mut idx = highest_existing;
+    loop {
+        idx += 1;
+        let mut new = FOOTNOTE_TEXT
+            .replace(&text, format!("[^{}]", idx).as_str())
+            .to_string();
+        std::mem::swap(&mut text, &mut new);
+        if text == new {
+            break;
+        }
+    }
+
+    text
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
@@ -198,7 +261,7 @@ impl Post {
         writeln!(writer, "{}", self.render_toml()?)?;
         writeln!(writer, "+++")?;
         writeln!(writer, "")?;
-        writeln!(writer, "{}", self.content)?;
+        writeln!(writer, "{}", reify_footnotes(&self.content))?;
         Ok(())
     }
 
@@ -393,5 +456,42 @@ author_name = "me"
 tags = ["tag1", "another"]
 "#;
         assert_eq!(strip_datetime_quotes(input), expect);
+    }
+
+    #[test]
+    fn test_reify_footnotes_basic() {
+        let input = "
+Lorem ipsum dolor sit amet, consectetur adipiscing elit[^n]. Aenean sollicitudin velit tellus, in dignissim tellus venenatis pulvinar.
+Suspendisse rhoncus nisi purus, ut convallis lectus placerat[^n] eget. Integer imperdiet eu nibh vitae tempor. Etiam at tristique enim.
+Mauris malesuada nibh sit amet ligula mollis, eu interdum ipsum[^n] faucibus. Ut rutrum sapien ligula, at dapibus dui vestibulum id. Donec bibendum
+felis finibus rhoncus gravida. Nulla facilisi. Aenean lacinia consectetur condimentum. Curabitur venenatis erat ex[^n], non auctor lorem sodales sit amet.
+Nam id ultrices mauris, et malesuada nisl. Aenean diam risus[^n], lobortis eget accumsan vitae, accumsan non eros. Quisque ac tincidunt quam,
+gravida tempor magna. Praesent pretium[^n] bibendum ante, et varius orci fermentum ac. Proin a tortor a nunc placerat pellentesque id ac ligula.
+
+[^n]: Duis commodo venenatis efficitur.
+[^n]: Aliquam semper convallis augue, non faucibus mauris commodo non. Pellentesque eget velit sed nunc lacinia tempus ac non erat.
+[^n]: Donec vel augue in arcu porttitor interdum.
+[^n]: Nunc consequat, risus ut scelerisque ornare, erat ligula ullamcorper turpis, sit amet eleifend justo lorem id ipsum.
+[^n]: Interdum et malesuada fames ac ante ipsum primis in faucibus.
+[^n]: Nullam eget nunc eget ante auctor finibus sit amet vitae tortor.
+        ".trim();
+
+        let expect = "
+Lorem ipsum dolor sit amet, consectetur adipiscing elit[^1]. Aenean sollicitudin velit tellus, in dignissim tellus venenatis pulvinar.
+Suspendisse rhoncus nisi purus, ut convallis lectus placerat[^2] eget. Integer imperdiet eu nibh vitae tempor. Etiam at tristique enim.
+Mauris malesuada nibh sit amet ligula mollis, eu interdum ipsum[^3] faucibus. Ut rutrum sapien ligula, at dapibus dui vestibulum id. Donec bibendum
+felis finibus rhoncus gravida. Nulla facilisi. Aenean lacinia consectetur condimentum. Curabitur venenatis erat ex[^4], non auctor lorem sodales sit amet.
+Nam id ultrices mauris, et malesuada nisl. Aenean diam risus[^5], lobortis eget accumsan vitae, accumsan non eros. Quisque ac tincidunt quam,
+gravida tempor magna. Praesent pretium[^6] bibendum ante, et varius orci fermentum ac. Proin a tortor a nunc placerat pellentesque id ac ligula.
+
+[^1]: Duis commodo venenatis efficitur.
+[^2]: Aliquam semper convallis augue, non faucibus mauris commodo non. Pellentesque eget velit sed nunc lacinia tempus ac non erat.
+[^3]: Donec vel augue in arcu porttitor interdum.
+[^4]: Nunc consequat, risus ut scelerisque ornare, erat ligula ullamcorper turpis, sit amet eleifend justo lorem id ipsum.
+[^5]: Interdum et malesuada fames ac ante ipsum primis in faucibus.
+[^6]: Nullam eget nunc eget ante auctor finibus sit amet vitae tortor.
+        ".trim();
+
+        assert_eq!(reify_footnotes(input), expect);
     }
 }
