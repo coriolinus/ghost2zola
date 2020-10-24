@@ -180,9 +180,11 @@ impl PartialExtraction {
             post.render_to(&mut writer)?;
             log::trace!("generated {}", relative_path.display());
         }
+        log::info!("extracted {} posts", posts.len());
 
         // now ensure that appropriate indices exist
-        ensure_indices(extract_path)?;
+        let n_indices = ensure_indices(extract_path)?;
+        log::info!("added {} indices", n_indices);
 
         Ok(posts.len())
     }
@@ -191,7 +193,9 @@ impl PartialExtraction {
 const ROOT_INDEX_DATA: &[u8] = include_bytes!("../templates/root._index.md");
 const BRANCH_INDEX_DATA: &[u8] = include_bytes!("../templates/branch._index.md");
 
-fn ensure_indices(extract_path: &Path) -> Result<(), Error> {
+fn ensure_indices(extract_path: &Path) -> Result<u32, Error> {
+    let mut n = 0;
+
     let index = extract_path.join("_index.md");
     if !index.exists() {
         let mut file = std::fs::OpenOptions::new()
@@ -199,6 +203,7 @@ fn ensure_indices(extract_path: &Path) -> Result<(), Error> {
             .create(true)
             .open(index)?;
         file.write_all(ROOT_INDEX_DATA)?;
+        n += 1;
     }
 
     for subdir in extract_path.read_dir()?.filter(|maybe_dir_entry| {
@@ -224,11 +229,13 @@ fn ensure_indices(extract_path: &Path) -> Result<(), Error> {
             }
         };
 
-        ensure_indices_recursive(&subdir.path())?;
+        n += ensure_indices_recursive(&subdir.path())?;
     }
 
     /// Recursive mode on!
-    fn ensure_indices_recursive(path: &Path) -> Result<(), Error> {
+    fn ensure_indices_recursive(path: &Path) -> Result<u32, Error> {
+        let mut n = 0;
+
         let index = path.join("_index.md");
         if !index.exists() {
             let mut file = std::fs::OpenOptions::new()
@@ -236,6 +243,7 @@ fn ensure_indices(extract_path: &Path) -> Result<(), Error> {
                 .create(true)
                 .open(index)?;
             file.write_all(BRANCH_INDEX_DATA)?;
+            n += 1;
         }
 
         for subdir in path.read_dir()?.filter(|maybe_dir_entry| {
@@ -261,11 +269,11 @@ fn ensure_indices(extract_path: &Path) -> Result<(), Error> {
                 }
             };
 
-            ensure_indices_recursive(&subdir.path())?;
+            n += ensure_indices_recursive(&subdir.path())?;
         }
 
-        Ok(())
+        Ok(n)
     }
 
-    Ok(())
+    Ok(n)
 }
