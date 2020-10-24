@@ -4,6 +4,10 @@ version = "0.1.0"
 authors = ["Peter Goodspeed-Niklaus <peter.r.goodspeedniklaus@gmail.com>"]
 edition = "2018"
 
+description = "Migrate a self-hosted Ghost blog's content to Zola"
+license = "MIT"
+repository = "https://github.com/coriolinus/ghost2zola"
+
 [dependencies]
 anyhow = "1.0.33"
 bzip2 = "0.4.1"
