@@ -127,8 +127,8 @@ where
 /// ## Self-hosted images
 ///
 /// Within each post's markdown, things which look like image links, i.e. things which match the regex
-/// `\]\(/content/images/\d{4}/\d{2}/[^)]+\)`, will have their absolute paths stripped out and replaced
-/// with relative paths, ending up as `](../$1)`. This should preserve the links.
+/// `\]\(/content/images/\d{4}/\d{2}/[^)]+\)`, will have the `/content/images` portion stripped out and
+/// replaced with `/blog`, ending up as `](/blog/dddd/mm/$1)`. This should preserve the links.
 ///
 /// ## Metadata
 ///

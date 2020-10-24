@@ -15,7 +15,7 @@ use std::str::FromStr;
 
 lazy_static! {
     static ref INTERNAL_LINK_RE: Regex =
-        RegexBuilder::new(r"\]\(/content/images/\d{4}/\d{2}/([^)]+)\)")
+        RegexBuilder::new(r"\]\(/content/images/(\d{4}/\d{2}/[^)]+)\)")
             .case_insensitive(true)
             .build()
             .unwrap();
@@ -34,7 +34,9 @@ lazy_static! {
 
 /// replace internal hardlinks with relative links to the parent
 pub(crate) fn relative_internal_links(text: &str) -> String {
-    INTERNAL_LINK_RE.replace_all(text, "](../$1)").into_owned()
+    INTERNAL_LINK_RE
+        .replace_all(text, "](/blog/$1)")
+        .into_owned()
 }
 
 /// strip quotation marks from toml fields named `date` or `updated`
@@ -351,7 +353,10 @@ mod tests {
 
         #[test]
         fn test_should_replace_link() {
-            replace_links("![](/content/images/2020/01/asdf.jpg)", "![](../asdf.jpg)");
+            replace_links(
+                "![](/content/images/2020/01/asdf.jpg)",
+                "![](/blog/2020/01/asdf.jpg)",
+            );
         }
 
         #[test]
@@ -364,7 +369,7 @@ mod tests {
         fn test_leaves_extra_markup() {
             replace_links(
                 "![very important pictures](/content/images/1234/56/fds.png)",
-                "![very important pictures](../fds.png)",
+                "![very important pictures](/blog/1234/56/fds.png)",
             );
         }
 
@@ -383,9 +388,9 @@ mod tests {
             let expect = "
             Hello, welcome to my gallery. I've included several pictures.
 
-            ![](../asdf.jpg)
+            ![](/blog/2020/01/asdf.jpg)
             ![](https://photobucket.com/content/images/2020/01/asdf.jpg)
-            ![very important pictures](../fds.png)
+            ![very important pictures](/blog/1234/56/fds.png)
 
             As you can see, they are phenomenal.
             ";
